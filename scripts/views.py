@@ -29,7 +29,7 @@ THIN = Side(style="thin", color="D9DDE3")
 
 COLUMNS = [("Posted", 18), ("Match Score", 11), ("Status", 26), ("Job Title", 46), ("Company", 30),
            ("Location", 26), ("Work Mode", 11), ("Job Type", 16), ("Salary", 18), ("Matched Skills", 40),
-           ("Missing Skills", 40), ("Applied?", 13), ("Job URL", 48), ("Job ID", 18)]
+           ("Missing Skills", 40), ("Applied?", 13), ("Job URL", 48), ("Job ID", 18), ("_built", 4)]
 STATUS_LABEL = {"verified_top_match": "Top match (> 9.0, open)", "top_match_unverified": "Top match (open unconfirmed)",
                 "qualified": "Qualified (8 - 9.0)"}
 
@@ -139,7 +139,8 @@ def build_views(wb, rows: list[dict], logs_dir: Path | None, now: datetime | Non
         ws["A1"] = f"{source}: openings scoring 8+ posted in the last 24 hours ({len(items)})"
         ws["A1"].font = Font(bold=True, size=14, color=INK)
         ws["A2"] = (f"Built {now.astimezone(IST).strftime('%d %b %Y, %H:%M')} IST from the Jobs sheet (full data kept "
-                    f"there). Rebuilt on every save - edit Application Status on the Jobs sheet, not here.")
+                    f"there). Rebuilt on every save; pick Applied / Not Applied / Not Working in 'Applied?' and it is "
+                    f"copied to the Jobs sheet on the next run.")
         ws["A2"].font = Font(size=9, color=MUTED)
         for c, (name, width) in enumerate(COLUMNS, 1):
             cell = ws.cell(row=4, column=c, value=name)
@@ -152,7 +153,7 @@ def build_views(wb, rows: list[dict], logs_dir: Path | None, now: datetime | Non
             vals = [_fmt_posted(r["_posted"]), r.get("Match Score"), STATUS_LABEL.get(status, status),
                     r.get("Job Title"), r.get("Company"), r.get("Location"), r.get("Work Mode"), r.get("Job Type"),
                     r.get("Salary"), r.get("Matched Skills"), r.get("Missing Skills"), r.get("Application Status"),
-                    r.get("Job URL"), r.get("Job ID")]
+                    r.get("Job URL"), r.get("Job ID"), r.get("Application Status")]
             for c, v in enumerate(vals, 1):
                 cell = ws.cell(row=r_i, column=c, value=v)
                 cell.font = Font(color=INK)
@@ -170,4 +171,8 @@ def build_views(wb, rows: list[dict], logs_dir: Path | None, now: datetime | Non
                 Font(italic=True, color=MUTED)
         ws.freeze_panes = "A5"
         ws.auto_filter.ref = f"A4:N{max(5, 4 + len(items))}"
+        ws.column_dimensions["O"].hidden = True          # value at build time, for syncing edits back
+        if items:
+            from excel_store import add_choice_dropdown
+            add_choice_dropdown(ws, f"L5:L{4 + len(items)}")
     return counts

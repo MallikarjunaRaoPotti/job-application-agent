@@ -128,3 +128,44 @@ def test_linkedin_still_works_alongside_sources():
     ws, stats = run_multi(FakeLLM(evaluations=[evaluation(), evaluation((3, 3, 3, 3))]),
                           {"indeed": [], "naukri": []}, raw_items=RAW)
     assert stats["discovery"]["eligible"] == 2 and stats["evaluated"] == 2
+
+
+# ---- Application Status dropdowns
+
+def _dv_ranges(ws):
+    return [(str(dv.sqref), dv.formula1) for dv in ws.data_validations.dataValidation]
+
+
+def test_application_status_dropdowns_on_jobs_and_views():
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
+    wb = load_workbook(ws.jobs_xlsx)
+    choices = '"Not Applied,Applied,Not Working"'
+    assert any(f == choices and r.startswith("P2:") for r, f in _dv_ranges(wb["Jobs"]))      # Application Status
+    assert any(r in ("L5", "L5:L5") and f == choices for r, f in _dv_ranges(wb["Indeed"]))
+    assert len(_dv_ranges(wb["Jobs"])) == 1                                                   # not duplicated on resave
+
+
+def test_choice_made_on_view_is_copied_to_jobs():
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
+    wb = load_workbook(ws.jobs_xlsx)
+    wb["Indeed"]["L5"] = "Applied"
+    wb.save(ws.jobs_xlsx)
+    store = JobStore(ws.jobs_xlsx)
+    assert store.view_edits_synced == 1
+    store.save()
+    jid = load_workbook(ws.jobs_xlsx)["Indeed"]["N5"].value
+    assert JobStore(ws.jobs_xlsx).get(jid)["Application Status"] == "Applied"
+    assert load_workbook(ws.jobs_xlsx)["Indeed"]["L5"].value == "Applied"                      # survives the rebuild
+
+
+def test_stale_view_never_overwrites_newer_jobs_edit():
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
+    wb = load_workbook(ws.jobs_xlsx)
+    jobs = wb["Jobs"]
+    col = [c.value for c in jobs[1]].index("Application Status") + 1
+    jobs.cell(row=2, column=col, value="Not Working")              # edited on Jobs; the view still says Not Applied
+    wb.save(ws.jobs_xlsx)
+    store = JobStore(ws.jobs_xlsx)
+    assert store.view_edits_synced == 0
+    store.save()
+    assert next(iter(JobStore(ws.jobs_xlsx).all()))["Application Status"] == "Not Working"

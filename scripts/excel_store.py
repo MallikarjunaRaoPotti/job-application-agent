@@ -16,6 +16,8 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 SHEET = "Jobs"
 COLUMNS = [
@@ -26,6 +28,8 @@ COLUMNS = [
 ]
 USER_OWNED = {"Application Status"}
 DEFAULT_APPLICATION_STATUS = "Not Applied"
+APPLICATION_CHOICES = ("Not Applied", "Applied", "Not Working")   # dropdown on Jobs + view tabs
+VIEW_SHEETS = ("LinkedIn", "Indeed", "Naukri")
 LIST_SEP = "; "
 MAX_CELL = 32000  # Excel's hard limit is 32,767 characters per cell
 WIDTHS = {"Job ID": 18, "Job Title": 40, "Company": 30, "Job URL": 45, "Job Description": 60,
@@ -69,6 +73,7 @@ class JobStore:
             self.ws.title = SHEET
         self._ensure_headers()
         self._rows = self._index_rows()
+        self.view_edits_synced = self._sync_view_edits()
 
     # ---------------------------------------------------------------- structure
 
@@ -150,9 +155,41 @@ class JobStore:
         self.ws.cell(row=r, column=self.col["Last Updated"], value=now_iso())
         return action
 
+    def _sync_view_edits(self) -> int:
+        """Copy Application Status choices made on the LinkedIn/Indeed/Naukri tabs back into Jobs.
+
+        Views are rebuilt on every save, so without this a dropdown choice made there would be lost.
+        Only cells the user changed since the view was built (vs. its hidden 'built value' column)
+        are copied, so a stale view never overwrites a newer edit made on the Jobs sheet.
+        """
+        synced = 0
+        col = self.col["Application Status"]
+        for name in VIEW_SHEETS:
+            if name not in self.wb.sheetnames:
+                continue
+            vs = self.wb[name]
+            head = {c.value: c.column for c in vs[4] if c.value}
+            if not {"Job ID", "Applied?", "_built"} <= set(head):
+                continue
+            for r in range(5, vs.max_row + 1):
+                jid = vs.cell(row=r, column=head["Job ID"]).value
+                val = vs.cell(row=r, column=head["Applied?"]).value
+                built = vs.cell(row=r, column=head["_built"]).value
+                if jid and str(jid) in self._rows and val in APPLICATION_CHOICES and val != built:
+                    cell = self.ws.cell(row=self._rows[str(jid)], column=col)
+                    if cell.value != val:
+                        cell.value = val
+                        synced += 1
+        return synced
+
+    def _apply_dropdown(self) -> None:
+        letter = get_column_letter(self.col["Application Status"])
+        add_choice_dropdown(self.ws, f"{letter}2:{letter}{max(2, self.ws.max_row) + 5000}")
+
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.ws.auto_filter.ref = self.ws.dimensions  # filter dropdowns on every column
+        self._apply_dropdown()
         from dashboard import build_dashboard     # summary sheet, rebuilt from the rows on every save
         from views import build_views              # LinkedIn / Indeed / Naukri: 8+ and posted in the last 24 h
         rows = self.all()
@@ -168,3 +205,16 @@ class JobStore:
         except PermissionError as exc:
             tmp.unlink(missing_ok=True)
             raise WorkbookLockedError(f"cannot write {self.path}; close it in Excel and re-run") from exc
+
+
+def add_choice_dropdown(ws, cell_range: str) -> None:
+    """Applied / Not Applied / Not Working dropdown on a range (replaces any earlier one on that column)."""
+    col = "".join(ch for ch in cell_range.split(":")[0] if ch.isalpha())
+    ws.data_validations.dataValidation = [
+        dv for dv in ws.data_validations.dataValidation
+        if not any("".join(ch for ch in str(rng).split(":")[0] if ch.isalpha()) == col for rng in dv.sqref.ranges)]
+    dv = DataValidation(type="list", formula1='"' + ",".join(APPLICATION_CHOICES) + '"', allow_blank=True,
+                        showDropDown=False, showErrorMessage=True, errorTitle="Application status",
+                        error="Choose Applied, Not Applied or Not Working.")
+    dv.add(cell_range)
+    ws.add_data_validation(dv)

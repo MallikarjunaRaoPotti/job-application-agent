@@ -82,20 +82,26 @@ def export(limit: int | None) -> Path | None:
     return out
 
 
-def load_evaluations(path: Path) -> dict[str, dict]:
+def load_evaluations(path: Path, strict: bool = True) -> dict[str, dict]:
+    """strict=False drops malformed entries (they stay unscored) instead of rejecting the whole file."""
     data = json.loads(path.read_text(encoding="utf-8"))
     evals = {}
-    for ev in data:
-        missing = [k for k in REQUIRED if k not in ev]
+    for ev in data if isinstance(data, list) else []:
+        missing = [k for k in REQUIRED if not isinstance(ev, dict) or k not in ev]
         if missing or not ev.get("job_id"):
-            raise ValueError(f"evaluation for {ev.get('job_id')!r} missing fields: {missing}")
+            if strict:
+                raise ValueError(f"evaluation for {ev.get('job_id') if isinstance(ev, dict) else ev!r} missing fields: {missing}")
+            log.warning("dropping malformed evaluation %r (missing %s)", ev.get("job_id") if isinstance(ev, dict) else ev, missing)
+            continue
         evals[str(ev["job_id"])] = {k: v for k, v in ev.items() if k != "job_id"}
     return evals
 
 
-def import_(path: Path, rescore: bool = False) -> dict:
+def import_(path: Path, rescore: bool = False, strict: bool = True) -> dict:
     ws = get_workspace()
-    evals = load_evaluations(path)
+    evals = load_evaluations(path, strict)
+    if not evals:
+        return {"evaluated": 0, "top_matches_new": 0}
     if rescore:  # corrected evaluations replace earlier scores (e.g. a lenient model's 9.8)
         store = JobStore(ws.jobs_xlsx)
         for jid in evals:

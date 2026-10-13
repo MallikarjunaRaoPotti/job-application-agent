@@ -21,8 +21,18 @@ This is a **local-only** job application preparation agent for one candidate, a 
   2. Claude reads it and writes `logs/agent_eval_N.json`: one `submit_evaluation` object per job, plus `job_id`. Each `resume_evidence` must be verbatim resume text.
   3. `python scripts/agent_scoring.py import <file>` runs the normal pipeline with `PrecomputedClient`, so every code guard, the 9.0 bar and the open check still apply. `--rescore` replaces existing scores.
 
-  The 8 AM scheduled run can't use this, so its jobs stay `unscored`. Watch for "FOR COLLEGE STUDENTS ONLY" certificate programs, Tier-1-only and Master's-only eligibility, and "N+ years" phrasing the regex misses; set `min_years_required` explicitly.
+  **Automatic fallback:** `scripts/agent_autoscore.py` does export → headless `claude -p` (Read/Write only, `--add-dir` the workspace logs) → lenient import, for up to N batches. `run_daily.cmd` runs it after the pipeline, so the 8 AM run gets scored even without OpenRouter credit. Claude Code is found through `CLAUDE_BIN`, `PATH`, or the newest `~/.vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude.exe`. Watch for "FOR COLLEGE STUDENTS ONLY" certificate programs, Tier-1-only and Master's-only eligibility, and "N+ years" phrasing the regex misses; set `min_years_required` explicitly.
 - **Model:** the paid model `nvidia/nemotron-3.5-lightning` is the default. Scoring runs 8 calls in parallel, with up to 600 calls and `--max-llm-usd` (default $1) per run. An HTTP 402 (no credits) leaves jobs `unscored`.
+- **Sources:** LinkedIn, plus Indeed and Naukri through `sources.py`, using `valig/indeed-jobs-scraper` and `valig/naukri-jobs-scraper` with native last-24h filters. Each config query becomes one capped actor run, configured in `search.json` → `sources`. There's no detail stage, because search results already carry the description.
+  - `job_id` is namespaced per platform: `make_job_id(ref, url, "indeed")`. LinkedIn IDs are unchanged.
+  - Naukri search results only carry a short summary, so `normalize_naukri` appends structured facts (role, skills, education, experience). `description_core_chars` drives a 100-character minimum instead of 300.
+  - Naukri's `consultant: true` means a staffing agency.
+  - The LinkedIn open-check (kaix) only gets LinkedIn rows. Indeed/Naukri top matches count as open from their last-24h listing.
+  - `run_pipeline.py --sources indeed,naukri` runs only those sources.
+- **View sheets:** `views.build_views()` runs on every `JobStore.save()` and creates tabs in this order: Dashboard, LinkedIn, Indeed, Naukri, Jobs.
+  - Each source tab shows only Match Score ≥ 8.0 jobs **posted in the last 24 h**, excluding closed or expired ones.
+  - Posting times come from the `logs/*_discovery.json` / `*_source_*.json` snapshots, because the Jobs sheet has no posted-date column. A date-only value counts as today or yesterday in IST.
+  - **The Jobs sheet is the agent's full reference data; never delete or rewrite its rows.**
 - **Avoid `\b` in regexes edited through shell heredocs**, because it turns into a backspace character. `scrape_jobs`/`verify_jobs` use letter lookarounds instead.
 
 ## Code vs data

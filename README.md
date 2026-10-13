@@ -13,11 +13,11 @@ Honesty is enforced in code. The language model only *suggests* scores. Python c
 
 | | |
 |---|---|
-| 🔎 **Discovers** | Fresh LinkedIn jobs from keyword × location searches (e.g. "Junior Data Engineer", India, last 24 h), using Apify |
+| 🔎 **Discovers** | Fresh jobs from **LinkedIn, Indeed and Naukri** using keyword searches (e.g. "Junior Data Engineer", India, last 24 h), through Apify |
 | 🧹 **Screens** | Before any LLM call, drops roles needing more than 1 year of experience or tagged Mid-Senior, staffing-agency posts, and red flags (fees, unpaid work, empty descriptions) |
 | 🎯 **Scores** | A 1–10 fit score from a rubric (skills, experience, projects, role). Every "matched skill" must be quoted verbatim from your resume, or it doesn't count |
 | ✅ **Verifies** | Jobs scoring **> 9.0** are re-checked on LinkedIn every run, and only those still open become `verified_top_match` |
-| 📊 **Tracks** | Everything lands in `jobs.xlsx` (one row per job, never duplicated), with a **Dashboard** sheet rebuilt on every save |
+| 📊 **Tracks** | Everything lands in `jobs.xlsx` (one row per job, never duplicated). On every save it rebuilds a **Dashboard** plus **LinkedIn / Indeed / Naukri** tabs showing only openings scoring 8+ that were posted in the last 24 h |
 | 📝 **Tailors** *(paused)* | A per-job resume that may only reorder and reword your own resume lines; a validator rejects any fabrication |
 
 ## How it works
@@ -50,7 +50,17 @@ The model is lenient on its own: in testing it gave 10/10 to a Mid-Senior role f
 - **Strict experience rule:** the required years are the highest value among the model's reading, the posting's experience field, and the description text. More than 1 year, or LinkedIn seniority Mid-Senior or above, caps the score at 7.
 - The 8/10 and 9.0 thresholds are constants in code. Contact details are stripped from the resume before it is sent to any model.
 
-### Detail fetching
+### Sources
+
+| Source | Apify actor | Notes |
+|---|---|---|
+| LinkedIn | `kaix/linkedin-jobs-scraper` (search) + `codenest/linkedin-job-search-scraper` (details, with kaix fallback) | Live open-check for top matches |
+| Indeed | `valig/indeed-jobs-scraper` (about $0.0001/job) | `country=in`, last 24 h, `expired` flag |
+| Naukri | `valig/naukri-jobs-scraper` (about $0.0004/job) | last 24 h, experience filter, `consultant` flag marks agencies |
+
+Job IDs are namespaced per source, so they never collide. Run a single source with `--sources indeed,naukri`.
+
+### Detail fetching (LinkedIn)
 
 - **Search:** `kaix/linkedin-jobs-scraper` in search-only mode, at about $0.00006 per hit.
 - **Details:** `codenest/linkedin-job-search-scraper` is tried first. Any job it drops, or a crash of the whole actor, falls back to kaix's job-ID lookup (about $0.0003 per job).
@@ -141,11 +151,16 @@ Register-ScheduledTask -TaskName "JobApplicationAgent Daily" `
   -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew)
 ```
 
-Edit the Python path inside `run_daily.cmd` to match your machine.
+`run_daily.cmd` finds Python on its own (set `PYTHON_EXE` to override). After the pipeline it runs the **Claude fallback** below, so jobs OpenRouter couldn't score still get scored.
 
 ### Scoring without OpenRouter
 
-If you're working in [Claude Code](https://claude.ai/code), the agent in your session can do the scoring instead:
+**Automatic.** `python scripts/agent_autoscore.py` scores whatever is still `unscored` by running headless [Claude Code](https://claude.ai/code) (`claude -p`) on batches of about 40 jobs:
+- Claude writes the evaluations, and the import applies every code guard, the 9.0 bar and the open check.
+- If nothing is waiting, it does nothing. The daily task runs it after every pipeline run, so when OpenRouter has no credit, Claude takes over.
+- It finds Claude Code through `CLAUDE_BIN`, your `PATH`, or the VS Code extension.
+
+**Manual**, inside an interactive Claude Code session:
 
 ```bash
 python scripts/agent_scoring.py export                         # unscored jobs -> logs/agent_batch_N.json
@@ -174,6 +189,10 @@ There is one row per job, keyed by a stable **Job ID**: `sha256` of the LinkedIn
 | Error Details | The reason a job was excluded or failed, cleared on success |
 
 Rows and any columns you add are preserved. Saves are atomic, and a `jobs.xlsx.bak` copy is kept.
+
+### `LinkedIn`, `Indeed`, `Naukri` sheets
+
+These are your daily shortlist: only openings with **Match Score ≥ 8.0 posted in the last 24 hours**, best first, with clickable links. Verified top matches are highlighted. They're rebuilt on every save, while the full history stays on the **Jobs** sheet for the agent's reference and deduplication.
 
 ### `Dashboard` sheet
 

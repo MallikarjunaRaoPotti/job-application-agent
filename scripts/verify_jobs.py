@@ -20,6 +20,7 @@ from scrape_jobs import SEARCH_ACTOR_ID, run_actor
 log = logging.getLogger("verify_jobs")
 
 MIN_DESCRIPTION_CHARS = 300
+MIN_NAUKRI_SUMMARY_CHARS = 100
 
 STAFFING_INDUSTRY_RE = re.compile(r"staffing|recruit|employment services|human resources services|"
                                   r"outsourcing and offshoring|executive search", re.I)
@@ -63,8 +64,11 @@ def screen(job: dict) -> tuple[str, str] | None:
              if y is not None]
     if years and max(years) > MAX_YEARS_ALLOWED:
         return "excluded_experience", f"requires {max(years):g}+ years of experience (max {MAX_YEARS_ALLOWED})"
-    if len(desc.strip()) < MIN_DESCRIPTION_CHARS:
-        return "excluded_red_flag", f"description missing or too short ({len(desc.strip())} chars)"
+    # Naukri search results only carry a short summary (structured facts are appended separately)
+    core = job.get("description_core_chars")
+    core_len, min_len = (core, MIN_NAUKRI_SUMMARY_CHARS) if isinstance(core, int) else (len(desc.strip()), MIN_DESCRIPTION_CHARS)
+    if core_len < min_len:
+        return "excluded_red_flag", f"description missing or too short ({core_len} chars)"
     for rx, reason in RED_FLAG_RES:
         if rx.search(desc):
             return "excluded_red_flag", reason

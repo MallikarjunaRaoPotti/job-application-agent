@@ -78,12 +78,15 @@ def extract_ref_id(item: dict) -> str | None:
     return None
 
 
-def make_job_id(ref_id: str | None, url: str | None) -> str | None:
-    """Deterministic internal ID: hash of platform + ref_id, else platform + canonical URL."""
+def make_job_id(ref_id: str | None, url: str | None, platform: str = PLATFORM) -> str | None:
+    """Deterministic internal ID: hash of platform + ref_id, else platform + canonical URL.
+
+    The default platform is linkedin, so LinkedIn IDs are unchanged; other sources pass their own name.
+    """
     if ref_id:
-        key = f"{PLATFORM}:ref:{ref_id}"
+        key = f"{platform}:ref:{ref_id}"
     elif canonical_url(url):
-        key = f"{PLATFORM}:url:{canonical_url(url)}"
+        key = f"{platform}:url:{canonical_url(url)}"
     else:
         return None
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]

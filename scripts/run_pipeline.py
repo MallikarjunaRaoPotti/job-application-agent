@@ -30,9 +30,11 @@ from excel_store import JobStore, WorkbookLockedError, split_list
 from openrouter import DEFAULT_MODEL, AuthError, DailyLimitReached, OpenRouterClient, is_free
 from resume_parser import load_base_resume
 from score_jobs import FIT_THRESHOLD, score_jobs
-from scrape_jobs import ScrapeError, discover, load_search_config, read_urls_file
+from scrape_jobs import ScrapeError, deduplicate, discover, load_search_config, read_urls_file
+from sources import SOURCES, normalize_all, search_source
 from tailor_job import process_job
 from verify_jobs import check_open, screen
+from views import source_of
 from workspace import Workspace, get_workspace
 
 REPO = Path(__file__).resolve().parent.parent
@@ -88,7 +90,7 @@ def job_from_row(row: dict) -> dict:
 
 
 SCORING_EXTRAS = ("seniority_level", "experience_required", "required_skills", "posted_date", "first_seen_at",
-                  "company_industry")
+                  "company_industry", "description_core_chars", "posted_at", "source")
 
 
 def discovery_details(ws: Workspace, fresh: list[dict]) -> dict[str, dict]:
@@ -99,14 +101,17 @@ def discovery_details(ws: Workspace, fresh: list[dict]) -> dict[str, dict]:
     from scrape_jobs import normalize
     details: dict[str, dict] = {}
     now = datetime.now(timezone.utc)
-    for snap in sorted(ws.logs_dir.glob("*_discovery.json")):
+    for snap in sorted(ws.logs_dir.glob("*_discovery.json")) + sorted(ws.logs_dir.glob("*_source_*.json")):
         try:
-            raw_items = json.loads(snap.read_text(encoding="utf-8")).get("raw_items") or []
+            data = json.loads(snap.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        for item in raw_items:
+        for item in data.get("raw_items") or []:
             job = normalize(item, now) if isinstance(item, dict) else None
             if job:
+                details[job["job_id"]] = job
+        for job in data.get("jobs") or []:          # Indeed / Naukri snapshots
+            if isinstance(job, dict) and job.get("job_id"):
                 details[job["job_id"]] = job
     details.update({j["job_id"]: j for j in fresh})
     return details
@@ -119,6 +124,50 @@ def with_extras(job: dict, details: dict[str, dict]) -> dict:
     out = {**job, **{k: extra[k] for k in SCORING_EXTRAS if extra.get(k) is not None}}
     out["company_linkedin_url"] = extra.get("company_linkedin_url")  # None is meaningful (red flag)
     return out
+
+
+class _SkipLinkedIn(Exception):
+    pass
+
+
+def discover_sources(cfg: dict, token: str | None, index: dict, ws: Workspace, run_id: str, stats: dict,
+                     upsert, dry_run: bool, source_items: dict | None = None) -> list[dict]:
+    """Indeed / Naukri: last-24h keyword searches -> normalize -> dedup against jobs.xlsx -> rows."""
+    fresh = []
+    now = datetime.now(timezone.utc)
+    for name, scfg in (cfg.get("sources") or {}).items():
+        if name not in SOURCES or not scfg.get("enabled", True):
+            continue
+        queries = scfg.get("queries") or cfg.get("queries") or []
+        try:
+            if source_items is not None:
+                items = source_items.get(name, [])
+            elif token:
+                items = search_source(name, queries, scfg, token)
+            else:
+                raise ScrapeError("APIFY_API_TOKEN is not set")
+        except ScrapeError as exc:
+            log.error("[%s] %s discovery failed: %s", run_id, name, exc)
+            stats["errors"].append({"stage": f"discovery:{name}", "error": str(exc)})
+            continue
+        jobs, malformed = normalize_all(name, items, now)
+        eligible, buckets = deduplicate(jobs, index)
+        for job in eligible:
+            upsert(job["job_id"], discovery_row(job, "discovered"))
+        for job in buckets["expired"]:
+            upsert(job["job_id"], discovery_row(job, "expired"))
+        stats["sources"][name] = {"found": len(items), "malformed": malformed, "normalized": len(jobs),
+                                  "duplicate_in_run": len(buckets["duplicate_in_run"]),
+                                  "previously_seen": len(buckets["previously_seen"]),
+                                  "expired": len(buckets["expired"]), "eligible": len(eligible)}
+        log.info("[%s] %s: %d found -> %d normalized -> %d new eligible (%d seen before, %d expired)", run_id,
+                 name, len(items), len(jobs), len(eligible), len(buckets["previously_seen"]), len(buckets["expired"]))
+        if not dry_run:
+            (ws.logs_dir / f"{run_id}_source_{name}.json").write_text(json.dumps(
+                {"run_id": run_id, "source": name, "stats": stats["sources"][name], "jobs": jobs},
+                indent=1, ensure_ascii=False, default=str), encoding="utf-8")
+        fresh += eligible
+    return fresh
 
 
 def _needs_tailoring(row: dict, force: bool) -> bool:
@@ -140,7 +189,8 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
         dry_run: bool = False, score_calls: int = DEFAULT_SCORE_CALLS_FREE, score_workers: int = 1,
         tailor: bool = False, tailor_calls: int = DEFAULT_TAILOR_CALLS,
         open_checker: Callable[[list[str]], dict] | None = None,
-        search_hits: list[dict] | None = None) -> dict:
+        search_hits: list[dict] | None = None, source_items: dict[str, list[dict]] | None = None,
+        only_sources: list[str] | None = None) -> dict:
     ws.setup()
     base = load_base_resume(ws.resume)
     store = JobStore(ws.jobs_xlsx)
@@ -148,7 +198,7 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
              "discovery": None, "evaluated": 0, "qualified": 0, "rejected_low_fit": 0, "unscored": 0,
              "scoring_errors": 0, "excluded_staffing": 0, "excluded_red_flag": 0, "excluded_experience": 0, "top_matches_new": 0,
              "verified_open": 0, "closed": 0, "open_unconfirmed": 0, "verified_top_matches_total": 0,
-             "tailoring": "enabled" if tailor else "paused", "resumes_generated": 0,
+             "sources": {}, "tailoring": "enabled" if tailor else "paused", "resumes_generated": 0,
              "resumes_skipped_existing": 0, "validation_failed": 0, "tailoring_deferred": 0, "errors": []}
     if open_checker is None and apify_token:
         def open_checker(ids):
@@ -168,8 +218,13 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
     if not skip_discovery:
         cfg = search_config if search_config is not None else load_search_config(ws.config_dir / "search.json")
         urls = read_urls_file(ws.config_dir / "search_urls.txt")
+        index = store.dedup_index()
+        if only_sources:  # e.g. ["indeed", "naukri"]: skip LinkedIn, keep only the named extra sources
+            cfg = {**cfg, "sources": {k: v for k, v in (cfg.get("sources") or {}).items() if k in only_sources}}
         try:
-            result = discover(urls, raw_items, search_config=cfg, token=apify_token, index=store.dedup_index(),
+            if only_sources and "linkedin" not in only_sources:
+                raise _SkipLinkedIn
+            result = discover(urls, raw_items, search_config=cfg, token=apify_token, index=index,
                               snapshot_dir=ws.logs_dir, dry_run=dry_run, run_id=run_id,
                               search_hits_override=search_hits)
             stats["discovery"] = result["stats"]
@@ -178,14 +233,20 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
             for job in result["buckets"]["expired"]:
                 upsert(job["job_id"], discovery_row(job, "expired"))
             save()
+        except _SkipLinkedIn:
+            pass
         except ScrapeError as exc:
             log.error("[%s] discovery failed: %s", run_id, exc)
             stats["errors"].append({"stage": "discovery", "error": str(exc)})
+        other_fresh = discover_sources(cfg, apify_token, index, ws, run_id, stats, upsert, dry_run, source_items)
+        save()
+    else:
+        other_fresh = []
 
-    fresh = (result["eligible"] if stats["discovery"] else [])
+    fresh = (result["eligible"] if stats["discovery"] else []) + other_fresh
     rows = [r for r in store.all() if not job_ids or str(r["Job ID"]) in job_ids]
     if dry_run and stats["discovery"]:  # dry run: rows weren't written, score the fresh jobs directly
-        rows += [{**{"Job ID": j["job_id"]}, **discovery_row(j, "discovered")} for j in result["eligible"]]
+        rows += [{**{"Job ID": j["job_id"]}, **discovery_row(j, "discovered")} for j in fresh]
 
     # 4-5. score; the 8/10 gate is enforced in score_jobs and again before tailoring
     evaluations: dict[str, dict] = {}
@@ -251,6 +312,14 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
                 if evaluations.get(str(r["Job ID"]), {}).get("match_score", 0) > TOP_MATCH_THRESHOLD else r
                 for r in rows]
     to_verify = [r for r in rows if r.get("Processing Status") in TO_VERIFY]
+    for r in [r for r in to_verify if source_of(r.get("Job URL")) != "LinkedIn"]:
+        # Indeed/Naukri: found in a last-24h search and listed as open (expired ones never get here)
+        if r.get("Processing Status") != "verified_top_match":
+            stats["verified_open"] += 1
+        upsert(str(r["Job ID"]), {"Processing Status": "verified_top_match",
+                                  "Error Details": "open per the source listing (posted in the last 24 h)"})
+    save()
+    to_verify = [r for r in to_verify if source_of(r.get("Job URL")) == "LinkedIn"]
     if to_verify:
         no_ref = [r for r in to_verify if not r.get("Source Reference ID")]
         for r in no_ref:
@@ -349,6 +418,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="regenerate resumes that already exist (with --tailor)")
     parser.add_argument("--tailor", action="store_true", help="generate resumes (paused by default in this phase)")
     parser.add_argument("--dry-run", action="store_true", help="call APIs and print, but write no files")
+    parser.add_argument("--sources", help="comma list of sources to search this run: linkedin,indeed,naukri "
+                                          "(default: all enabled)")
     parser.add_argument("--reuse-search-dataset", metavar="DATASET_ID",
                         help="use an earlier (already paid) Apify search dataset instead of searching again")
     parser.add_argument("--max-search-results", type=int)
@@ -406,7 +477,8 @@ def main(argv: list[str] | None = None) -> int:
                     apify_token=os.environ.get("APIFY_API_TOKEN"), search_config=search_config,
                     skip_discovery=args.skip_discovery, job_ids=args.job_id, force=args.force,
                     dry_run=args.dry_run, score_calls=score_calls, score_workers=1 if free else SCORE_WORKERS_PAID,
-                    tailor=args.tailor, tailor_calls=args.max_tailor_calls, search_hits=search_hits)
+                    tailor=args.tailor, tailor_calls=args.max_tailor_calls, search_hits=search_hits,
+                    only_sources=[x.strip().lower() for x in args.sources.split(",")] if args.sources else None)
     except (WorkbookLockedError, FileNotFoundError) as exc:
         log.error("[%s] %s", run_id, exc)
         return 1

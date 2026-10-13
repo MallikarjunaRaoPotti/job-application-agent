@@ -199,6 +199,21 @@ def build_dashboard(wb, rows: list[dict]) -> None:
         ws.cell(row=r, column=1, value="None yet").font = Font(italic=True, color=MUTED)
         r += 1
 
+    # ---------------------------------------------------------- by source
+    from views import VIEW_SOURCES, source_of
+    top = r + 2
+    _section(ws, top, 1, "By source", "Openings scoring 8+ posted in the last 24 hours are on the LinkedIn / Indeed / Naukri tabs")
+    _head(ws, top + 2, 1, ["Source", "Tracked", "", "Scored", "Score 8+", f"Verified top (> {TOP_BAR:g})"])
+    for i, src in enumerate(VIEW_SOURCES):
+        mine = [x for x in rows if source_of(x.get("Job URL")) == src]
+        sc = [x["Match Score"] for x in mine if isinstance(x.get("Match Score"), (int, float))
+              and not isinstance(x.get("Match Score"), bool)]
+        vals = [src, len(mine), None, len(sc), sum(1 for v in sc if v >= 8),
+                sum(1 for x in mine if x.get("Processing Status") == "verified_top_match")]
+        for c, v in enumerate(vals, 1):
+            ws.cell(row=top + 3 + i, column=c, value=v).font = Font(color=INK)
+    r = top + 3 + len(VIEW_SOURCES)
+
     # ---------------------------------------------------------- exclusions + discovery by day
     top = r + 2
     _section(ws, top, 1, "Why jobs were excluded", "Screened out before scoring - no LLM cost")

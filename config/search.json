@@ -34,5 +34,20 @@
   "max_search_results": 1200,
   "max_detail_fetches": 440,
   "max_charge_usd_search": 0.2,
-  "max_charge_usd_details": 2.65
+  "max_charge_usd_details": 2.65,
+  "sources": {
+    "indeed": {
+      "enabled": true,
+      "max_jobs_per_query": 30,
+      "max_charge_usd": 0.2,
+      "parallel_runs": 5
+    },
+    "naukri": {
+      "enabled": true,
+      "max_jobs_per_query": 30,
+      "experience_years": 1,
+      "max_charge_usd": 0.4,
+      "parallel_runs": 5
+    }
+  }
 }

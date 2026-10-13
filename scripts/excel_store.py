@@ -154,7 +154,10 @@ class JobStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.ws.auto_filter.ref = self.ws.dimensions  # filter dropdowns on every column
         from dashboard import build_dashboard     # summary sheet, rebuilt from the rows on every save
-        build_dashboard(self.wb, self.all())
+        from views import build_views              # LinkedIn / Indeed / Naukri: 8+ and posted in the last 24 h
+        rows = self.all()
+        build_dashboard(self.wb, rows)
+        build_views(self.wb, rows, self.path.parent / "logs")
         self.wb.active = self.wb.sheetnames.index(SHEET)
         tmp = self.path.with_name(self.path.stem + ".tmp.xlsx")
         try:

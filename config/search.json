@@ -1,0 +1,38 @@
+{
+  "queries": [
+    "Junior Data Engineer",
+    "Data Engineer fresher",
+    "Data Engineering Intern",
+    "Graduate Data Engineer",
+    "Data Engineer",
+    "Junior Data Analyst",
+    "Data Analyst fresher",
+    "Data Analyst Intern",
+    "Data Analyst",
+    "BI Analyst",
+    "Business Intelligence Analyst",
+    "Power BI Developer",
+    "Analytics Engineer",
+    "SQL Developer fresher",
+    "ETL Developer",
+    "Junior AI Engineer",
+    "AI Engineer",
+    "AI Engineer Intern",
+    "Generative AI Engineer",
+    "GenAI Developer",
+    "Agentic AI Engineer",
+    "LLM Engineer",
+    "Python Developer data",
+    "Python Developer fresher",
+    "Graduate Engineer Trainee data"
+  ],
+  "locations": [
+    "India"
+  ],
+  "date_posted": "past_24h",
+  "max_jobs_per_search": 50,
+  "max_search_results": 1200,
+  "max_detail_fetches": 440,
+  "max_charge_usd_search": 0.2,
+  "max_charge_usd_details": 2.65
+}

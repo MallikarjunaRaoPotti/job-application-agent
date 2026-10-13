@@ -1,0 +1,5 @@
+# Optional: extra LinkedIn job URLs to scrape alongside the keyword search in config/search.json.
+# One per line. Supported (job ID must be in the URL):
+#   https://www.linkedin.com/jobs/view/4380097715
+#   https://www.linkedin.com/jobs/search/?currentJobId=111&originToLandingJobPostings=222%2C333
+# Plain keyword-search URLs (?keywords=...) are skipped; put keywords in config/search.json instead.

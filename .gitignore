@@ -1,0 +1,11 @@
+.env
+output/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# personal data - stays on this PC only
+/resume.md
+/config/search_urls.txt.local
+*.xlsx

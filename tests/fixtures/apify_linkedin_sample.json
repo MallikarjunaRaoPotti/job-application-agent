@@ -1,0 +1,13 @@
+[
+ {"id": "4100000001", "title": "Junior Data Engineer", "companyName": "Acme Analytics",
+  "location": "Bengaluru, Karnataka, India", "descriptionText": "Build PySpark pipelines on Databricks.",
+  "link": "https://www.linkedin.com/jobs/view/4100000001"},
+ {"id": "4100000002", "title": "Data Analyst", "companyName": "Beta Corp", "location": "Remote, India",
+  "descriptionText": "Power BI dashboards.", "link": "https://in.linkedin.com/jobs/view/data-analyst-at-beta-corp-4100000002?trk=abc",
+  "validThrough": "2020-01-01", "salary": null, "salaryText": null},
+ {"id": null, "title": "AI Engineer", "companyName": "Gamma AI", "link": "https://www.linkedin.com/jobs/view/4100000003/"},
+ {"id": "4100000001", "title": "Junior Data Engineer", "companyName": "Acme Analytics",
+  "link": "https://www.linkedin.com/jobs/view/4100000001"},
+ {"id": "4100000004", "title": null, "companyName": "No Title Inc", "link": "https://www.linkedin.com/jobs/view/4100000004"},
+ "not a dict"
+]

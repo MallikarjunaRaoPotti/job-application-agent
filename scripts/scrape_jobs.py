@@ -197,6 +197,7 @@ def normalize(item: dict, now: datetime) -> dict | None:
         "apply_url": _apply_url(item),
         "company_industry": _clean_str(item.get("companyIndustry")) or _clean_str(item.get("industries")),
         "company_linkedin_url": _clean_str(item.get("companyLinkedinUrl")),
+        "company_size": _clean_str(item.get("companySize")),        # "11-50 employees"; often missing
     }
 
 

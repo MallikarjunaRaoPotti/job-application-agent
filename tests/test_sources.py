@@ -92,7 +92,8 @@ def _master(wb):
     """Master rows as {header: value} dicts."""
     s = wb["Master"]
     head = [c.value for c in s[4]]
-    return [dict(zip(head, (c.value for c in s[r]))) for r in range(5, s.max_row + 1) if s.cell(row=r, column=7).value]
+    jid = head.index("Job ID") + 1
+    return [dict(zip(head, (c.value for c in s[r]))) for r in range(5, s.max_row + 1) if s.cell(row=r, column=jid).value]
 
 
 def test_indeed_and_naukri_jobs_flow_through_screen_score_and_views():
@@ -159,27 +160,27 @@ def test_application_status_dropdowns_on_jobs_and_views():
     wb = load_workbook(ws.jobs_xlsx)
     choices = '"Not Applied,Applied,Not Working"'
     assert any(f == choices and r.startswith("P2:") for r, f in _dv_ranges(wb["Jobs"]))      # Application Status
-    assert any(r in ("K5", "K5:K5") and f == choices for r, f in _dv_ranges(wb["Master"]))
+    assert any(r in ("L5", "L5:L5") and f == choices for r, f in _dv_ranges(wb["Master"]))
     assert len(_dv_ranges(wb["Jobs"])) == 1                                                   # not duplicated on resave
 
 
 def test_choice_made_on_view_is_copied_to_jobs():
     ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
     wb = load_workbook(ws.jobs_xlsx)
-    wb["Master"]["K5"] = "Applied"
+    wb["Master"]["L5"] = "Applied"
     wb.save(ws.jobs_xlsx)
     store = JobStore(ws.jobs_xlsx)
     assert store.view_edits_synced == 1
     store.save()
-    jid = load_workbook(ws.jobs_xlsx)["Master"]["G5"].value
+    jid = load_workbook(ws.jobs_xlsx)["Master"]["H5"].value
     assert JobStore(ws.jobs_xlsx).get(jid)["Application Status"] == "Applied"
-    assert load_workbook(ws.jobs_xlsx)["Master"]["K5"].value == "Applied"                      # survives the rebuild
+    assert load_workbook(ws.jobs_xlsx)["Master"]["L5"].value == "Applied"                      # survives the rebuild
 
 
 def test_not_working_choice_removes_job_from_master_on_next_run():
     ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
     wb = load_workbook(ws.jobs_xlsx)
-    wb["Master"]["K5"] = "Not Working"
+    wb["Master"]["L5"] = "Not Working"
     wb.save(ws.jobs_xlsx)
     JobStore(ws.jobs_xlsx).save()                                   # the next run: sync, then rebuild
     assert _master(load_workbook(ws.jobs_xlsx)) == []

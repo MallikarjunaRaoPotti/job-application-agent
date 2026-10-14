@@ -31,6 +31,7 @@ STATUS_ORDER = [
     ("excluded_experience", "Excluded: experience / seniority"),
     ("excluded_staffing", "Excluded: staffing agency"),
     ("excluded_red_flag", "Excluded: red flag"),
+    ("excluded_small_company", "Excluded: under 50 employees"),
     ("expired", "Expired before scoring"),
     ("closed", "Closed after matching"),
     ("unscored", "Waiting to be scored"),
@@ -97,6 +98,8 @@ def _reason_group(status: str, detail: str) -> str:
             if key in d:
                 return label
         return "Other red flag"
+    if status == "excluded_small_company":
+        return "Company under 50 employees"
     return status
 
 

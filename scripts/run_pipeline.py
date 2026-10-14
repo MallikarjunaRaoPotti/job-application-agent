@@ -4,7 +4,7 @@ Everything is stored under <Desktop>/JobApplicationAgent/ (see workspace.py). jo
 tracker and the dedup store, so reruns are safe: known jobs are skipped and unfinished work is retried.
 
 Current phase: resume tailoring is PAUSED (opt in with --tailor). Jobs are screened for staffing
-agencies and red flags before scoring; jobs scoring > 9.0 are re-checked as open on LinkedIn every run
+agencies, red flags and companies under 50 employees (LinkedIn size or Apollo) before scoring; jobs scoring > 9.0 are re-checked as open on LinkedIn every run
 and marked verified_top_match. Applications are never submitted.
 
 Usage:
@@ -26,7 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from excel_store import JobStore, WorkbookLockedError, split_list
+from company_size import CompanySizer, check_companies, default_sizer, master_items
+from excel_store import JobStore, WorkbookLockedError, company_key, split_list
 from openrouter import DEFAULT_MODEL, AuthError, DailyLimitReached, OpenRouterClient, is_free
 from resume_parser import load_base_resume
 from score_jobs import FIT_THRESHOLD, score_jobs
@@ -34,7 +35,7 @@ from scrape_jobs import ScrapeError, deduplicate, discover, load_search_config, 
 from sources import SOURCES, normalize_all, search_source
 from tailor_job import process_job
 from verify_jobs import check_open, screen
-from views import source_of
+from views import company_values, source_of
 from workspace import Workspace, get_workspace
 
 REPO = Path(__file__).resolve().parent.parent
@@ -90,7 +91,7 @@ def job_from_row(row: dict) -> dict:
 
 
 SCORING_EXTRAS = ("seniority_level", "experience_required", "required_skills", "posted_date", "first_seen_at",
-                  "company_industry", "description_core_chars", "posted_at", "source")
+                  "company_industry", "description_core_chars", "posted_at", "source", "company_size")
 
 
 def discovery_details(ws: Workspace, fresh: list[dict]) -> dict[str, dict]:
@@ -190,13 +191,14 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
         tailor: bool = False, tailor_calls: int = DEFAULT_TAILOR_CALLS,
         open_checker: Callable[[list[str]], dict] | None = None,
         search_hits: list[dict] | None = None, source_items: dict[str, list[dict]] | None = None,
-        only_sources: list[str] | None = None) -> dict:
+        only_sources: list[str] | None = None, company_sizer: CompanySizer | None = None) -> dict:
     ws.setup()
     base = load_base_resume(ws.resume)
     store = JobStore(ws.jobs_xlsx)
     stats = {"run_id": run_id, "rows_before": len(store), "rows_inserted": 0, "rows_updated": 0,
              "discovery": None, "evaluated": 0, "qualified": 0, "rejected_low_fit": 0, "unscored": 0,
-             "scoring_errors": 0, "excluded_staffing": 0, "excluded_red_flag": 0, "excluded_experience": 0, "top_matches_new": 0,
+             "scoring_errors": 0, "excluded_staffing": 0, "excluded_red_flag": 0, "excluded_experience": 0,
+             "excluded_small_company": 0, "company_lookups": 0, "top_matches_new": 0,
              "verified_open": 0, "closed": 0, "open_unconfirmed": 0, "verified_top_matches_total": 0,
              "sources": {}, "tailoring": "enabled" if tailor else "paused", "resumes_generated": 0,
              "resumes_skipped_existing": 0, "validation_failed": 0, "tailoring_deferred": 0, "errors": []}
@@ -266,6 +268,13 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
             else:
                 kept.append(job)
         to_score = kept
+        if company_sizer and to_score:              # free too: LinkedIn size, the cache, or one Apollo call
+            known = company_values(store.all())
+            items = [(j["job_id"], j.get("company"), j.get("company_size"), j.get("company_linkedin_url"),
+                      known.get(company_key(j.get("company")), {}).get("Company Domain")) for j in to_score]
+            sized = check_companies(store, company_sizer, items, upsert, fill_domains=not dry_run)
+            stats["excluded_small_company"] += sized["excluded_small_company"]
+            to_score = [j for j in to_score if j["job_id"] not in sized["excluded_ids"]]
         save()
         missing = [j["job_id"] for j in to_score if not j.get("seniority_level") and not j.get("experience_required")]
         if missing:
@@ -349,6 +358,17 @@ def run(ws: Workspace, *, run_id: str, client_factory: Callable[[int], OpenRoute
             else:
                 stats["open_unconfirmed"] += 1
                 upsert(str(r["Job ID"]), {"Processing Status": "top_match_unverified", "Error Details": reason})
+        save()
+
+    # company size for Master rows not checked yet (older jobs, failed lookups, or a newly typed domain)
+    if company_sizer:
+        sized = check_companies(store, company_sizer, master_items(store, discovery_details(ws, fresh)),
+                                upsert, fill_domains=not dry_run)
+        stats["excluded_small_company"] += sized["excluded_small_company"]
+        stats["company_lookups"] = company_sizer.lookups
+        stats["company_lookups_stopped"] = company_sizer.stopped   # not an error: unchecked rows retry next run
+        if not dry_run:
+            company_sizer.save()
         save()
 
     # tailoring (paused in this phase unless --tailor)
@@ -478,7 +498,8 @@ def main(argv: list[str] | None = None) -> int:
                     skip_discovery=args.skip_discovery, job_ids=args.job_id, force=args.force,
                     dry_run=args.dry_run, score_calls=score_calls, score_workers=1 if free else SCORE_WORKERS_PAID,
                     tailor=args.tailor, tailor_calls=args.max_tailor_calls, search_hits=search_hits,
-                    only_sources=[x.strip().lower() for x in args.sources.split(",")] if args.sources else None)
+                    only_sources=[x.strip().lower() for x in args.sources.split(",")] if args.sources else None,
+                    company_sizer=default_sizer(ws.root))
     except (WorkbookLockedError, FileNotFoundError) as exc:
         log.error("[%s] %s", run_id, exc)
         return 1

@@ -35,9 +35,10 @@ LINK, INK, MUTED, HEAD_BG, TOP_BG, EDIT_BG = "2A78D6", "0B0B0B", "8A8984", "E8EE
 THIN = Side(style="thin", color="D9DDE3")
 
 COLUMNS = [("Platform", 11), ("Posted", 17), ("Match Score", 11), ("Status", 26), ("Company", 28),
-           ("Job Title", 44), ("Job ID", 18), ("Location", 24), ("Job URL", 40), ("Job Description", 60),
+           ("Employees", 11), ("Job Title", 44), ("Job ID", 18), ("Location", 24), ("Job URL", 40), ("Job Description", 60),
            ("Applied?", 13), ("Company Domain", 22), ("Email Format", 16), ("Emails in JD", 34),
            ("Contact Emails", 40)]
+COL = {name: i for i, (name, _) in enumerate(COLUMNS, 1)}
 BUILT = [(f"_built:{view}", 4) for view, _ in MASTER_EDITABLE]   # hidden: value at build time, for syncing edits
 STATUS_LABEL = {"verified_top_match": "Top match (> 9.0, open)", "top_match_unverified": "Top match (open unconfirmed)",
                 "qualified": "Qualified (8 - 9.0)"}
@@ -126,7 +127,8 @@ def master_rows(rows: list[dict], posted: dict[str, str]) -> list[dict]:
         score = r.get("Match Score")
         if not isinstance(score, (int, float)) or isinstance(score, bool) or score < MIN_SCORE:
             continue
-        if r.get("Processing Status") in HIDE_STATUSES or r.get("Application Status") == "Not Working":
+        status = str(r.get("Processing Status") or "")
+        if status in HIDE_STATUSES or status.startswith("excluded_") or r.get("Application Status") == "Not Working":
             continue
         out.append({**r, "_posted": posted.get(str(r.get("Job ID"))) or r.get("Date Discovered")})
     oldest = datetime.min.replace(tzinfo=timezone.utc)
@@ -194,7 +196,8 @@ def build_views(wb, rows: list[dict], logs_dir: Path | None, now: datetime | Non
                        else company.get(field)) for view, field in MASTER_EDITABLE}
         found = emails_in(r.get("Job Description"))
         vals = [source_of(r.get("Job URL")), _fmt_posted(r["_posted"]), r.get("Match Score"),
-                STATUS_LABEL.get(status, status), r.get("Company"), r.get("Job Title"), r.get("Job ID"),
+                STATUS_LABEL.get(status, status), r.get("Company"), r.get("Employees"), r.get("Job Title"),
+                r.get("Job ID"),
                 r.get("Location"), r.get("Job URL"), r.get("Job Description"), mine["Applied?"],
                 mine["Company Domain"], mine["Email Format"], "; ".join(found) or None, mine["Contact Emails"],
                 *(mine[view] for view, _ in MASTER_EDITABLE)]
@@ -209,15 +212,16 @@ def build_views(wb, rows: list[dict], logs_dir: Path | None, now: datetime | Non
                 cell.fill = PatternFill("solid", fgColor=TOP_BG)
         ws.cell(row=r_i, column=3).number_format = "0.00"
         if r.get("Job URL"):
-            link = ws.cell(row=r_i, column=9)
+            link = ws.cell(row=r_i, column=COL["Job URL"])
             link.hyperlink = r["Job URL"]
             link.font = Font(color=LINK, underline="single")
     if not items:
         ws.cell(row=5, column=1, value="No open openings scoring 8+ yet.").font = Font(italic=True, color=MUTED)
-    ws.freeze_panes = "F5"                                # platform .. company stay visible while scrolling
+    ws.freeze_panes = "G5"                                # platform .. employees stay visible while scrolling
     last = len(COLUMNS)
     ws.auto_filter.ref = f"A4:{ws.cell(row=4, column=last).column_letter}{max(5, 4 + len(items))}"
     if items:
         from excel_store import add_choice_dropdown
-        add_choice_dropdown(ws, f"K5:K{4 + len(items)}")
+        applied = ws.cell(row=4, column=COL["Applied?"]).column_letter
+        add_choice_dropdown(ws, f"{applied}5:{applied}{4 + len(items)}")
     return {MASTER_SHEET: len(items)}

@@ -27,7 +27,7 @@ COLUMNS = [
     "Job URL", "Job Description", "Required Skills", "Preferred Skills", "Matched Skills", "Missing Skills",
     "Match Score", "Application Status", "Date Discovered", "Resume Path", "Tailoring Report Path",
     "Processing Status", "Last Updated", "Error Details",
-    "Company Domain", "Email Format", "Contact Emails",
+    "Company Domain", "Email Format", "Contact Emails", "Employees",
 ]
 COMPANY_FIELDS = ("Company Domain", "Email Format", "Contact Emails")   # one value per company
 USER_OWNED = {"Application Status", *COMPANY_FIELDS}
@@ -174,6 +174,23 @@ class JobStore:
                 cell.alignment = Alignment(wrap_text=False, vertical="top")
         self.ws.cell(row=r, column=self.col["Last Updated"], value=now_iso())
         return action
+
+    def fill_company_field(self, company, field: str, value) -> bool:
+        """Set a company-level user column on every row of that company where it is still empty.
+
+        Used to pre-fill Company Domain from Apollo; anything the user already typed is kept.
+        """
+        key, filled = company_key(company), False
+        if not key or value in (None, ""):
+            return False
+        ccol, fcol = self.col["Company"], self.col[field]
+        for row in self._rows.values():
+            if company_key(self.ws.cell(row=row, column=ccol).value) == key:
+                cell = self.ws.cell(row=row, column=fcol)
+                if cell.value in (None, ""):
+                    cell.value = value
+                    filled = True
+        return filled
 
     def _sync_view_edits(self) -> int:
         """Copy what the user typed on the Master tab back into Jobs.

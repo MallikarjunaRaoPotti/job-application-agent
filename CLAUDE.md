@@ -29,10 +29,11 @@ This is a **local-only** job application preparation agent for one candidate, a 
   - Naukri's `consultant: true` means a staffing agency.
   - The LinkedIn open-check (kaix) only gets LinkedIn rows. Indeed/Naukri top matches count as open from their last-24h listing.
   - `run_pipeline.py --sources indeed,naukri` runs only those sources.
-- **View sheets:** `views.build_views()` runs on every `JobStore.save()` and creates tabs in this order: Dashboard, LinkedIn, Indeed, Naukri, Jobs.
-  - Each source tab shows only Match Score ≥ 8.0 jobs **posted in the last 24 h**, excluding closed or expired ones.
-  - Posting times come from the `logs/*_discovery.json` / `*_source_*.json` snapshots, because the Jobs sheet has no posted-date column. A date-only value counts as today or yesterday in IST.
-  - **The Jobs sheet is the agent's full reference data; never delete or rewrite its rows.**
+- **Master sheet:** `views.build_views()` runs on every `JobStore.save()` and creates tabs in this order: Dashboard, Master, Jobs. The old LinkedIn/Indeed/Naukri tabs are deleted.
+  - Master lists **every** open job with Match Score ≥ 8.0 from all platforms (not just the last 24 h), excluding closed or expired ones. It is sorted newest posting first and has a `Platform` column. Daily runs only fetch last-24h postings, so Master grows over time.
+  - Posting times come from the `logs/*_discovery.json` / `*_source_*.json` snapshots, because the Jobs sheet has no posted-date column.
+  - The user fills four columns: `Applied?` and the company-level `Company Domain`, `Email Format` and `Contact Emails`. `JobStore._sync_view_edits()` copies only cells changed since the build (compared with hidden `_built:<column>` columns) back to Jobs. Company fields are written to every Jobs row of that company (matched by `company_key()`), and newer jobs from the same company display them too. `Emails in JD` is extracted automatically from the description.
+  - **The Jobs sheet is the agent's full reference data; never delete or rewrite its rows.** The user columns are appended at the end of Jobs.
 - **Avoid `\b` in regexes edited through shell heredocs**, because it turns into a backspace character. `scrape_jobs`/`verify_jobs` use letter lookarounds instead.
 
 ## Code vs data

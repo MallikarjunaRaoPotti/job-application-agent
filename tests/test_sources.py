@@ -1,4 +1,4 @@
-"""Indeed / Naukri normalization, multi-source pipeline, and the per-source 24 h views."""
+"""Indeed / Naukri normalization, multi-source pipeline, and the Master view tab."""
 from datetime import datetime, timedelta, timezone
 
 from openpyxl import load_workbook
@@ -8,7 +8,7 @@ from excel_store import JobStore
 from scrape_jobs import make_job_id
 from sources import normalize_indeed, normalize_naukri
 from test_pipeline import LONG_DESC, RAW, FakeLLM, evaluation, rows, top_eval
-from views import posted_within_24h, source_of
+from views import emails_in, parse_posted, source_of
 from workspace import get_workspace
 
 NOW = datetime.now(timezone.utc)
@@ -63,15 +63,19 @@ def test_source_of_url():
     assert source_of("https://www.linkedin.com/jobs/view/1") == "LinkedIn"
 
 
-# ---- 24 h window
+# ---- posting times + emails
 
-def test_posted_within_24h():
-    assert posted_within_24h((NOW - timedelta(hours=5)).isoformat(), NOW)
-    assert not posted_within_24h((NOW - timedelta(hours=30)).isoformat(), NOW)
-    today = NOW.astimezone(IST).date()
-    assert posted_within_24h(today.isoformat(), NOW) and posted_within_24h((today - timedelta(days=1)).isoformat(), NOW)
-    assert not posted_within_24h((today - timedelta(days=2)).isoformat(), NOW)
-    assert not posted_within_24h(None, NOW)
+def test_parse_posted():
+    assert parse_posted("2026-10-14T05:00:00Z") == datetime(2026, 10, 14, 5, tzinfo=timezone.utc)
+    assert parse_posted("2026-10-14") == datetime(2026, 10, 14, tzinfo=IST)
+    assert parse_posted("2026-10-14 09:30:00") == datetime(2026, 10, 14, 9, 30, tzinfo=timezone.utc)
+    assert parse_posted(None) is None and parse_posted("yesterday") is None
+
+
+def test_emails_in_description():
+    text = "Send CV to HR@Acme.com or hr@acme.com. Logo: banner@2x.png; also jobs.india@acme.co.in."
+    assert emails_in(text) == ["hr@acme.com", "jobs.india@acme.co.in"]
+    assert emails_in(None) == []
 
 
 # ---- pipeline + views
@@ -84,9 +88,11 @@ def run_multi(llm, source_items, **kw):
     return ws, stats
 
 
-def _view_titles(wb, sheet):
-    s = wb[sheet]
-    return [s.cell(row=r, column=4).value for r in range(5, s.max_row + 1) if s.cell(row=r, column=14).value]
+def _master(wb):
+    """Master rows as {header: value} dicts."""
+    s = wb["Master"]
+    head = [c.value for c in s[4]]
+    return [dict(zip(head, (c.value for c in s[r]))) for r in range(5, s.max_row + 1) if s.cell(row=r, column=7).value]
 
 
 def test_indeed_and_naukri_jobs_flow_through_screen_score_and_views():
@@ -102,18 +108,30 @@ def test_indeed_and_naukri_jobs_flow_through_screen_score_and_views():
     assert sum(1 for r in data.values() if r["Processing Status"] == "verified_top_match") == 1
 
     wb = load_workbook(ws.jobs_xlsx)
-    assert wb.sheetnames[:4] == ["Dashboard", "LinkedIn", "Indeed", "Naukri"] and "Jobs" in wb.sheetnames
-    shown = {s: _view_titles(wb, s) for s in ("Indeed", "Naukri", "LinkedIn")}
-    assert len(shown["Indeed"]) + len(shown["Naukri"]) == 2           # only the two 8+ jobs
-    assert shown["LinkedIn"] == []
+    assert wb.sheetnames == ["Dashboard", "Master", "Jobs"]
+    shown = _master(wb)
+    assert len(shown) == 2                                             # only the two 8+ jobs
+    assert {m["Platform"] for m in shown} <= {"Indeed", "Naukri"}
     assert len(data) == 4                                              # Jobs sheet keeps everything
 
 
-def test_view_excludes_old_postings_but_jobs_keeps_them():
-    items = {"indeed": [indeed_item(published=(NOW - timedelta(hours=40)).isoformat())], "naukri": []}
-    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), items)
-    assert _view_titles(load_workbook(ws.jobs_xlsx), "Indeed") == []  # 40 h old -> not in the 24 h view
-    assert len(rows(ws)) == 1                                          # but kept in Jobs
+def test_master_keeps_older_8plus_postings_newest_first():
+    items = {"indeed": [indeed_item(published=(NOW - timedelta(hours=40)).isoformat()),
+                        indeed_item(key="ffff0000eeee1111", title="Data Analyst Intern")], "naukri": []}
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval(), top_eval()]), items)
+    titles = [m["Job Title"] for m in _master(load_workbook(ws.jobs_xlsx))]
+    assert titles == ["Data Analyst Intern", "Junior Data Analyst"]    # 40 h old stays, listed after the newer one
+
+
+def test_master_hides_closed_and_low_scores():
+    items = {"indeed": [indeed_item(), indeed_item(key="ffff0000eeee1111", title="Data Analyst Intern")], "naukri": []}
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval(), evaluation((3, 3, 3, 3))]), items)
+    store = JobStore(ws.jobs_xlsx)
+    jid = next(r["Job ID"] for r in store.all() if r["Job Title"] == "Junior Data Analyst")
+    assert [m["Job ID"] for m in _master(load_workbook(ws.jobs_xlsx))] == [jid]
+    store.upsert(jid, {"Processing Status": "closed"})
+    store.save()
+    assert _master(load_workbook(ws.jobs_xlsx)) == [] and len(rows(ws)) == 2
 
 
 def test_rerun_dedups_indeed_and_naukri():
@@ -141,21 +159,21 @@ def test_application_status_dropdowns_on_jobs_and_views():
     wb = load_workbook(ws.jobs_xlsx)
     choices = '"Not Applied,Applied,Not Working"'
     assert any(f == choices and r.startswith("P2:") for r, f in _dv_ranges(wb["Jobs"]))      # Application Status
-    assert any(r in ("L5", "L5:L5") and f == choices for r, f in _dv_ranges(wb["Indeed"]))
+    assert any(r in ("K5", "K5:K5") and f == choices for r, f in _dv_ranges(wb["Master"]))
     assert len(_dv_ranges(wb["Jobs"])) == 1                                                   # not duplicated on resave
 
 
 def test_choice_made_on_view_is_copied_to_jobs():
     ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
     wb = load_workbook(ws.jobs_xlsx)
-    wb["Indeed"]["L5"] = "Applied"
+    wb["Master"]["K5"] = "Applied"
     wb.save(ws.jobs_xlsx)
     store = JobStore(ws.jobs_xlsx)
     assert store.view_edits_synced == 1
     store.save()
-    jid = load_workbook(ws.jobs_xlsx)["Indeed"]["N5"].value
+    jid = load_workbook(ws.jobs_xlsx)["Master"]["G5"].value
     assert JobStore(ws.jobs_xlsx).get(jid)["Application Status"] == "Applied"
-    assert load_workbook(ws.jobs_xlsx)["Indeed"]["L5"].value == "Applied"                      # survives the rebuild
+    assert load_workbook(ws.jobs_xlsx)["Master"]["K5"].value == "Applied"                      # survives the rebuild
 
 
 def test_stale_view_never_overwrites_newer_jobs_edit():
@@ -169,3 +187,55 @@ def test_stale_view_never_overwrites_newer_jobs_edit():
     assert store.view_edits_synced == 0
     store.save()
     assert next(iter(JobStore(ws.jobs_xlsx).all()))["Application Status"] == "Not Working"
+
+
+# ---- company columns on Master
+
+def test_company_domain_typed_once_applies_to_every_job_of_that_company():
+    items = {"indeed": [indeed_item(), indeed_item(key="ffff0000eeee1111", title="Data Analyst Intern")],
+             "naukri": [naukri_item()]}
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval(), top_eval(), top_eval()]), items)
+    wb = load_workbook(ws.jobs_xlsx)
+    head = [c.value for c in wb["Master"][4]]
+    row = next(r for r in range(5, 8) if wb["Master"].cell(row=r, column=5).value == "Acme Analytics")
+    wb["Master"].cell(row=row, column=head.index("Company Domain") + 1, value=" https://www.Acme.com/careers ")
+    wb["Master"].cell(row=row, column=head.index("Email Format") + 1, value="first.last")
+    wb.save(ws.jobs_xlsx)
+    store = JobStore(ws.jobs_xlsx)
+    assert store.view_edits_synced == 2
+    store.save()
+    data = rows(ws).values()
+    assert [r["Company Domain"] for r in data if r["Company"] == "Acme Analytics"] == ["acme.com", "acme.com"]
+    assert [r["Company Domain"] for r in data if r["Company"] == "Beta Corp"] == [None]
+    shown = _master(load_workbook(ws.jobs_xlsx))
+    assert {(m["Company"], m["Company Domain"], m["Email Format"]) for m in shown} == {
+        ("Acme Analytics", "acme.com", "first.last"), ("Beta Corp", None, None)}
+
+
+def test_later_job_from_known_company_shows_its_domain():
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
+    store = JobStore(ws.jobs_xlsx)
+    jid = next(iter(store.all()))["Job ID"]
+    store.ws.cell(row=2, column=store.col["Company Domain"], value="acme.com")    # typed on the Jobs sheet
+    store.save()
+    run_multi(FakeLLM(evaluations=[top_eval()]),
+              {"indeed": [indeed_item(key="ffff0000eeee1111", title="Data Analyst Intern")], "naukri": []}, run_id="r2")
+    shown = _master(load_workbook(ws.jobs_xlsx))
+    assert len(shown) == 2 and all(m["Company Domain"] == "acme.com" for m in shown)
+    assert JobStore(ws.jobs_xlsx).get(jid)["Company Domain"] == "acme.com"
+
+
+def test_choice_left_on_old_platform_tab_is_kept_when_master_replaces_it():
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
+    jid = next(iter(rows(ws)))
+    wb = load_workbook(ws.jobs_xlsx)
+    old = wb.create_sheet("Indeed")                     # the layout the previous version wrote
+    for c, name in enumerate(["Applied?", "Job ID", "_built"], 1):
+        old.cell(row=4, column=c, value=name)
+    old.append(["Applied", jid, "Not Applied"])
+    wb.save(ws.jobs_xlsx)
+    store = JobStore(ws.jobs_xlsx)
+    assert store.view_edits_synced == 1
+    store.save()
+    assert "Indeed" not in load_workbook(ws.jobs_xlsx).sheetnames
+    assert JobStore(ws.jobs_xlsx).get(jid)["Application Status"] == "Applied"

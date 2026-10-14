@@ -3,13 +3,15 @@
 Rules:
 - Existing rows are preserved; the workbook is loaded and updated in place, never recreated.
 - Columns are located by header name, so reordered or extra user columns are tolerated.
-- "Application Status" is the user's column: set to "Not Applied" on insert, never overwritten.
+- "Application Status" is the user's column: set to "Not Applied" on insert, never overwritten. So are
+  "Company Domain", "Email Format" and "Contact Emails", which the user fills on the Master tab.
 - Saves go to a temp file then atomically replace jobs.xlsx, keeping jobs.xlsx.bak.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,11 +27,16 @@ COLUMNS = [
     "Job URL", "Job Description", "Required Skills", "Preferred Skills", "Matched Skills", "Missing Skills",
     "Match Score", "Application Status", "Date Discovered", "Resume Path", "Tailoring Report Path",
     "Processing Status", "Last Updated", "Error Details",
+    "Company Domain", "Email Format", "Contact Emails",
 ]
-USER_OWNED = {"Application Status"}
+COMPANY_FIELDS = ("Company Domain", "Email Format", "Contact Emails")   # one value per company
+USER_OWNED = {"Application Status", *COMPANY_FIELDS}
 DEFAULT_APPLICATION_STATUS = "Not Applied"
-APPLICATION_CHOICES = ("Not Applied", "Applied", "Not Working")   # dropdown on Jobs + view tabs
-VIEW_SHEETS = ("LinkedIn", "Indeed", "Naukri")
+APPLICATION_CHOICES = ("Not Applied", "Applied", "Not Working")   # dropdown on Jobs + Master
+MASTER_SHEET = "Master"
+MASTER_EDITABLE = (("Applied?", "Application Status"), ("Company Domain", "Company Domain"),
+                   ("Email Format", "Email Format"), ("Contact Emails", "Contact Emails"))   # (Master header, Jobs column)
+LEGACY_VIEW_SHEETS = ("LinkedIn", "Indeed", "Naukri")   # replaced by Master; edits left on them are still synced once
 LIST_SEP = "; "
 MAX_CELL = 32000  # Excel's hard limit is 32,767 characters per cell
 WIDTHS = {"Job ID": 18, "Job Title": 40, "Company": 30, "Job URL": 45, "Job Description": 60,
@@ -46,6 +53,19 @@ def _cell_value(value):
     if isinstance(value, str):
         value = value[:MAX_CELL]
     return value
+
+
+def company_key(name) -> str:
+    """Company name normalized for matching rows of the same company ('Acme  Analytics' == 'acme analytics')."""
+    return " ".join(str(name or "").split()).casefold()
+
+
+def clean_domain(value) -> str | None:
+    """'https://www.Fractal.ai/careers' -> 'fractal.ai'."""
+    v = str(value or "").strip().lower()
+    v = re.sub(r"^[a-z]+://", "", v).split("/")[0].split("?")[0]
+    v = v.removeprefix("www.")
+    return v or None
 
 
 def split_list(value) -> list[str]:
@@ -156,30 +176,48 @@ class JobStore:
         return action
 
     def _sync_view_edits(self) -> int:
-        """Copy Application Status choices made on the LinkedIn/Indeed/Naukri tabs back into Jobs.
+        """Copy what the user typed on the Master tab back into Jobs.
 
-        Views are rebuilt on every save, so without this a dropdown choice made there would be lost.
-        Only cells the user changed since the view was built (vs. its hidden 'built value' column)
-        are copied, so a stale view never overwrites a newer edit made on the Jobs sheet.
+        Master is rebuilt on every save, so without this an edit made there would be lost. Only cells
+        the user changed since the tab was built (vs. its hidden '_built:<column>' copy) are copied, so
+        a stale tab never overwrites a newer edit made on the Jobs sheet. Applied? goes to that job's
+        row; the company fields go to every row of the same company. The old LinkedIn/Indeed/Naukri
+        tabs (Applied? + '_built') are read too, so choices left on them survive the switch to Master.
         """
         synced = 0
-        col = self.col["Application Status"]
-        for name in VIEW_SHEETS:
+        for name in (MASTER_SHEET, *LEGACY_VIEW_SHEETS):
             if name not in self.wb.sheetnames:
                 continue
             vs = self.wb[name]
             head = {c.value: c.column for c in vs[4] if c.value}
-            if not {"Job ID", "Applied?", "_built"} <= set(head):
+            if "Job ID" not in head:
                 continue
-            for r in range(5, vs.max_row + 1):
-                jid = vs.cell(row=r, column=head["Job ID"]).value
-                val = vs.cell(row=r, column=head["Applied?"]).value
-                built = vs.cell(row=r, column=head["_built"]).value
-                if jid and str(jid) in self._rows and val in APPLICATION_CHOICES and val != built:
-                    cell = self.ws.cell(row=self._rows[str(jid)], column=col)
-                    if cell.value != val:
-                        cell.value = val
-                        synced += 1
+            for view_col, field in MASTER_EDITABLE:
+                built_col = head.get(f"_built:{view_col}") or (head.get("_built") if view_col == "Applied?" else None)
+                if view_col not in head or not built_col:
+                    continue
+                for r in range(5, vs.max_row + 1):
+                    jid = vs.cell(row=r, column=head["Job ID"]).value
+                    val = vs.cell(row=r, column=head[view_col]).value
+                    built = vs.cell(row=r, column=built_col).value
+                    if not jid or str(jid) not in self._rows or val == built:
+                        continue
+                    if field == "Application Status":
+                        if val not in APPLICATION_CHOICES:
+                            continue
+                        targets = [self._rows[str(jid)]]
+                    else:
+                        val = clean_domain(val) if field == "Company Domain" else (str(val or "").strip() or None)
+                        key = company_key(self.ws.cell(row=self._rows[str(jid)], column=self.col["Company"]).value)
+                        targets = [row for row in self._rows.values()
+                                   if company_key(self.ws.cell(row=row, column=self.col["Company"]).value) == key]
+                    changed = False
+                    for row in targets:
+                        cell = self.ws.cell(row=row, column=self.col[field])
+                        if cell.value != val:
+                            cell.value = val
+                            changed = True
+                    synced += changed
         return synced
 
     def _apply_dropdown(self) -> None:
@@ -191,7 +229,7 @@ class JobStore:
         self.ws.auto_filter.ref = self.ws.dimensions  # filter dropdowns on every column
         self._apply_dropdown()
         from dashboard import build_dashboard     # summary sheet, rebuilt from the rows on every save
-        from views import build_views              # LinkedIn / Indeed / Naukri: 8+ and posted in the last 24 h
+        from views import build_views              # Master: every open 8+ opening, all platforms
         rows = self.all()
         build_dashboard(self.wb, rows)
         build_views(self.wb, rows, self.path.parent / "logs")

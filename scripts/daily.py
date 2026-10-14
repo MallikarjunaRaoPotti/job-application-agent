@@ -4,6 +4,7 @@
   2. agent_autoscore.py  jobs OpenRouter couldn't score are scored by headless Claude Code
 
 Everything is appended to <workspace>/logs/scheduler.log. `--check` only proves the launcher works.
+The scheduled task runs this with pythonw.exe, so no console window appears (closing one kills the run).
 """
 
 from __future__ import annotations
@@ -38,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
                            ("claude-fallback", ["agent_autoscore.py", "--batch", "40", "--max-batches", "15"])):
             note(f"{name} start")
             proc = subprocess.run([sys.executable, str(SCRIPTS / args[0]), *args[1:]], cwd=SCRIPTS.parent,
-                                  stdout=log, stderr=subprocess.STDOUT, env=env)
+                                  stdout=log, stderr=subprocess.STDOUT, env=env,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))   # no console window to close by accident
             note(f"{name} exit {proc.returncode}")
             code = code or proc.returncode
         return code

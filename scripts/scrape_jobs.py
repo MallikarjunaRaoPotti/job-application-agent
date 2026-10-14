@@ -346,7 +346,8 @@ def search_job_ids(cfg: dict, token: str) -> list[dict]:
         "fetchDetails": False,
     }
     hits = run_actor(SEARCH_ACTOR_ID, actor_input, token, max_results,
-                     float(cfg.get("max_charge_usd_search", 0.10)))
+                     float(cfg.get("max_charge_usd_search", 0.10)),
+                     timeout_secs=int(cfg.get("search_timeout_secs", 3000)))  # LinkedIn paging is slow
     return [h for h in hits if isinstance(h, dict) and re.fullmatch(r"\d{6,}", str(h.get("jobId") or ""))]
 
 

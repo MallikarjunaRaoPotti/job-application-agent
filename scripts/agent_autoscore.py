@@ -78,7 +78,7 @@ def score_batch(binary: str, batch: Path, out: Path, resume: Path, timeout: int)
            "--permission-mode", "acceptEdits", "--allowedTools", "Read", "Write"]
     try:
         proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout)
+                              errors="replace", timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired:
         log.error("claude timed out on %s", batch.name)
         return False

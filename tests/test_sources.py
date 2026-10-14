@@ -176,6 +176,16 @@ def test_choice_made_on_view_is_copied_to_jobs():
     assert load_workbook(ws.jobs_xlsx)["Master"]["K5"].value == "Applied"                      # survives the rebuild
 
 
+def test_not_working_choice_removes_job_from_master_on_next_run():
+    ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
+    wb = load_workbook(ws.jobs_xlsx)
+    wb["Master"]["K5"] = "Not Working"
+    wb.save(ws.jobs_xlsx)
+    JobStore(ws.jobs_xlsx).save()                                   # the next run: sync, then rebuild
+    assert _master(load_workbook(ws.jobs_xlsx)) == []
+    assert next(iter(rows(ws).values()))["Application Status"] == "Not Working"   # kept in Jobs
+
+
 def test_stale_view_never_overwrites_newer_jobs_edit():
     ws, _ = run_multi(FakeLLM(evaluations=[top_eval()]), {"indeed": [indeed_item()], "naukri": []})
     wb = load_workbook(ws.jobs_xlsx)

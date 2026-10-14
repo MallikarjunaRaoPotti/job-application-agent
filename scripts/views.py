@@ -1,7 +1,8 @@
 """'Master' view sheet in jobs.xlsx: every open opening with Match Score >= 8, from all platforms.
 
 The daily run only fetches jobs posted in the last 24 hours; the ones that score 8+ land here and
-stay, so the Master tab grows day by day. Closed or expired openings are left out. It is rebuilt
+stay, so the Master tab grows day by day. Closed or expired openings, and the ones the user marked
+'Not Working' (a fake or dead listing), are left out; they stay in the Jobs sheet. It is rebuilt
 from the Jobs sheet on every save, and the Jobs sheet (the agent's full reference data) keeps
 every row.
 
@@ -125,7 +126,7 @@ def master_rows(rows: list[dict], posted: dict[str, str]) -> list[dict]:
         score = r.get("Match Score")
         if not isinstance(score, (int, float)) or isinstance(score, bool) or score < MIN_SCORE:
             continue
-        if r.get("Processing Status") in HIDE_STATUSES:
+        if r.get("Processing Status") in HIDE_STATUSES or r.get("Application Status") == "Not Working":
             continue
         out.append({**r, "_posted": posted.get(str(r.get("Job ID"))) or r.get("Date Discovered")})
     oldest = datetime.min.replace(tzinfo=timezone.utc)

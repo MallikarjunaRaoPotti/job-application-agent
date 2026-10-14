@@ -151,7 +151,7 @@ Register-ScheduledTask -TaskName "JobApplicationAgent Daily" `
   -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew)
 ```
 
-`run_daily.cmd` finds Python on its own (set `PYTHON_EXE` to override). After the pipeline it runs the **Claude fallback** below, so jobs OpenRouter couldn't score still get scored.
+`run_daily.cmd` finds Python on its own (set `PYTHON_EXE` to override) and runs `scripts/daily.py`, which logs to `logs/scheduler.log`. Check the launcher with `scriptsun_daily.cmd --check`. After the pipeline it runs the **Claude fallback** below, so jobs OpenRouter couldn't score still get scored.
 
 ### Scoring without OpenRouter
 

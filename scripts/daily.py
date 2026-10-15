@@ -35,9 +35,12 @@ def main(argv: list[str] | None = None) -> int:
             note(f"launcher check ok (python {sys.executable})")
             return 0
         code = 0
-        extra = [a for a in argv if a != "--check"]          # e.g. --from-snapshot <file> after a crash
-        for name, args in (("pipeline", ["run_pipeline.py", *extra]),
-                           ("claude-fallback", ["agent_autoscore.py", "--batch", "40", "--max-batches", "15"])):
+        extra = [a for a in argv if a not in ("--check", "--score-only")]   # e.g. --from-snapshot <file>
+        steps = [("pipeline", ["run_pipeline.py", *extra]),
+                 ("claude-fallback", ["agent_autoscore.py", "--batch", "40", "--max-batches", "15"])]
+        if "--score-only" in argv:   # just score the backlog (on-demand task "JobApplicationAgent Score")
+            steps = steps[1:]
+        for name, args in steps:
             note(f"{name} start")
             proc = subprocess.run([sys.executable, str(SCRIPTS / args[0]), *args[1:]], cwd=SCRIPTS.parent,
                                   stdout=log, stderr=subprocess.STDOUT, env=env,

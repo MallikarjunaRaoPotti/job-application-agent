@@ -440,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="call APIs and print, but write no files")
     parser.add_argument("--sources", help="comma list of sources to search this run: linkedin,indeed,naukri "
                                           "(default: all enabled)")
+    parser.add_argument("--from-snapshot", type=Path, metavar="DISCOVERY_JSON",
+                        help="finish a crashed run: reuse the LinkedIn details saved in logs/<run>_discovery.json")
     parser.add_argument("--reuse-search-dataset", metavar="DATASET_ID",
                         help="use an earlier (already paid) Apify search dataset instead of searching again")
     parser.add_argument("--max-search-results", type=int)
@@ -484,6 +486,10 @@ def main(argv: list[str] | None = None) -> int:
             search_config["max_detail_fetches"] = args.max_detail_fetches
 
     search_hits = None
+    raw_items = None
+    if args.from_snapshot:
+        raw_items = json.loads(args.from_snapshot.read_text(encoding="utf-8")).get("raw_items") or []
+        log.info("[%s] reusing %d LinkedIn job details from %s", run_id, len(raw_items), args.from_snapshot.name)
     if args.reuse_search_dataset:
         from scrape_jobs import dataset_items
         search_hits = dataset_items(args.reuse_search_dataset, os.environ.get("APIFY_API_TOKEN") or "")
@@ -494,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         stats = run(ws, run_id=run_id,
                     client_factory=lambda budget: OpenRouterClient(api_key, model, call_budget=budget,
                                                                    spend_cap_usd=None if free else args.max_llm_usd),
-                    apify_token=os.environ.get("APIFY_API_TOKEN"), search_config=search_config,
+                    apify_token=os.environ.get("APIFY_API_TOKEN"), search_config=search_config, raw_items=raw_items,
                     skip_discovery=args.skip_discovery, job_ids=args.job_id, force=args.force,
                     dry_run=args.dry_run, score_calls=score_calls, score_workers=1 if free else SCORE_WORKERS_PAID,
                     tailor=args.tailor, tailor_calls=args.max_tailor_calls, search_hits=search_hits,

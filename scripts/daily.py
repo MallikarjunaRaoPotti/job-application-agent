@@ -35,7 +35,8 @@ def main(argv: list[str] | None = None) -> int:
             note(f"launcher check ok (python {sys.executable})")
             return 0
         code = 0
-        for name, args in (("pipeline", ["run_pipeline.py"]),
+        extra = [a for a in argv if a != "--check"]          # e.g. --from-snapshot <file> after a crash
+        for name, args in (("pipeline", ["run_pipeline.py", *extra]),
                            ("claude-fallback", ["agent_autoscore.py", "--batch", "40", "--max-batches", "15"])):
             note(f"{name} start")
             proc = subprocess.run([sys.executable, str(SCRIPTS / args[0]), *args[1:]], cwd=SCRIPTS.parent,

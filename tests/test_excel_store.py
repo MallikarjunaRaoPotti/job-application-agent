@@ -153,3 +153,12 @@ def test_dashboard_sheet_built_on_save_and_rebuilt_not_duplicated(tmp_path):
     assert "LinkedIn seniority: Mid-Senior level" in cells and "Staffing / recruiting company" in cells
     assert len(dash._charts) == 2
     assert JobStore(tmp_path / "jobs.xlsx").get("a1")["Match Score"] == 9.6   # Jobs data untouched
+
+
+def test_control_characters_in_scraped_text_are_stripped(tmp_path):
+    """Regression: a LinkedIn description with control chars crashed the whole save (IllegalCharacterError)."""
+    store = JobStore(tmp_path / "jobs.xlsx")
+    store.upsert("a1", {"Job Description": "About\x0bWeRize\x02 hiring\tSQL\nanalysts", "Company": "We\x1fRize"})
+    store.save()
+    row = JobStore(tmp_path / "jobs.xlsx").get("a1")
+    assert row["Job Description"] == "AboutWeRize hiring\tSQL\nanalysts" and row["Company"] == "WeRize"

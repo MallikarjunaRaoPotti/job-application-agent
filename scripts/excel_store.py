@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -51,7 +52,8 @@ def _cell_value(value):
     if isinstance(value, (list, tuple)):
         value = LIST_SEP.join(str(v) for v in value if str(v).strip())
     if isinstance(value, str):
-        value = value[:MAX_CELL]
+        # scraped text can carry control characters Excel refuses (openpyxl raises IllegalCharacterError)
+        value = ILLEGAL_CHARACTERS_RE.sub("", value)[:MAX_CELL]
     return value
 
 

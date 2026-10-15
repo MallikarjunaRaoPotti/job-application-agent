@@ -76,16 +76,34 @@ def score_batch(binary: str, batch: Path, out: Path, resume: Path, timeout: int)
     prompt = PROMPT.format(resume=resume, batch=batch, out=out, fields=fields)
     cmd = [binary, "-p", prompt, "--max-turns", "12", "--add-dir", str(out.parent), "--add-dir", str(resume.parent),
            "--permission-mode", "acceptEdits", "--allowedTools", "Read", "Write"]
+    # stdin=DEVNULL: `claude -p` waits for piped stdin to close; under Task Scheduler (pythonw) the
+    # inherited stdin never closes, so without this the batch hangs forever.
+    proc = subprocess.Popen(cmd, cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace",
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
-        proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        log.error("claude timed out on %s", batch.name)
+        kill_tree(proc)
+        log.error("claude timed out on %s after %ds; killed", batch.name, timeout)
         return False
     if proc.returncode != 0:
-        log.error("claude failed on %s: %s", batch.name, (proc.stderr or proc.stdout)[-300:])
+        log.error("claude failed on %s: %s", batch.name, (stderr or stdout)[-300:])
         return False
     return out.is_file()
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the process and its children (a plain kill can leave a child holding the output pipes)."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    else:
+        proc.kill()
+    try:
+        proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:

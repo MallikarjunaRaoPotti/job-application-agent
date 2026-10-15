@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         for name, args in steps:
             note(f"{name} start")
             proc = subprocess.run([sys.executable, str(SCRIPTS / args[0]), *args[1:]], cwd=SCRIPTS.parent,
-                                  stdout=log, stderr=subprocess.STDOUT, env=env,
+                                  stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env,
                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))   # no console window to close by accident
             note(f"{name} exit {proc.returncode}")
             code = code or proc.returncode
